@@ -1,16 +1,49 @@
+/*!
+A (bad) snake clone written in Bevy
+
+Adapted from: <https://mbuffett.com/posts/bevy-snake-tutorial/>
+*/
 use bevy::{
     prelude::*,
     window::{PrimaryWindow, WindowResolution},
 };
+use rand::random;
 
+/// The color of the snake's head
 const SNAKE_HEAD_COLOR: Color = Color::linear_rgb(0.7, 0.7, 0.7);
+/// The color of the food
+const FOOD_COLOR: Color = Color::linear_rgb(1., 47. / 255., 136. / 255.); // #ff2f88
+/// The width of the game board (in tiles)
 const AREA_WIDTH: u32 = 10;
+/// The height of the game board (in tiles)
 const AREA_HEIGHT: u32 = 10;
+
+#[derive(Debug, Component)]
+struct Food;
 
 #[derive(Component, Debug)]
 struct Position {
     x: i32,
     y: i32,
+}
+
+#[derive(PartialEq, Clone, Copy)]
+enum Direction {
+    Left,
+    Up,
+    Right,
+    Down,
+}
+
+impl Direction {
+    fn opposite(self) -> Self {
+        match self {
+            Direction::Left => Direction::Right,
+            Direction::Up => Direction::Down,
+            Direction::Right => Direction::Left,
+            Direction::Down => Direction::Up,
+        }
+    }
 }
 
 #[derive(Component)]
@@ -28,8 +61,30 @@ impl Size {
     }
 }
 
+#[derive(Resource)]
+struct FoodSpawnTimer(Timer);
+
+fn food_spawner(time: Res<Time>, mut timer: ResMut<FoodSpawnTimer>, mut commands: Commands) {
+    if timer.0.tick(time.delta()).just_finished() {
+        commands
+            .spawn(Sprite {
+                color: FOOD_COLOR,
+                ..Default::default()
+            })
+            .insert(Food)
+            .insert(Position {
+                x: (random::<f32>() * AREA_WIDTH as f32) as i32,
+                y: (random::<f32>() * AREA_HEIGHT as f32) as i32,
+            })
+            .insert(Size::square(0.8));
+    }
+}
+
 #[derive(Component)]
-struct SnakeHead;
+struct SnakeHead {
+    direction: Direction,
+    last_direction: Option<Direction>,
+}
 
 fn spawn_snake(mut commands: Commands) {
     commands
@@ -43,27 +98,78 @@ fn spawn_snake(mut commands: Commands) {
                 ..default()
             },
         ))
-        .insert(SnakeHead)
+        .insert(SnakeHead {
+            direction: Direction::Up,
+            last_direction: None,
+        })
         .insert(Position { x: 3, y: 3 })
         .insert(Size::square(0.8));
 }
 
-fn snake_movement(
+#[derive(Resource)]
+struct SnakeMovementTimer(Timer);
+
+fn snake_movement_input(
     keyboard_input: Res<ButtonInput<KeyCode>>,
-    mut head_positions: Query<&mut Position, With<SnakeHead>>,
+    mut heads: Query<&mut SnakeHead>,
 ) {
-    for mut pos in head_positions.iter_mut() {
-        if keyboard_input.pressed(KeyCode::ArrowLeft) {
-            pos.x = (pos.x - 1).max(0);
+    if let Some(mut head) = heads.iter_mut().next() {
+        let dir: Direction = if keyboard_input.pressed(KeyCode::ArrowLeft) {
+            Direction::Left
+        } else if keyboard_input.pressed(KeyCode::ArrowDown) {
+            Direction::Down
+        } else if keyboard_input.pressed(KeyCode::ArrowUp) {
+            Direction::Up
+        } else if keyboard_input.pressed(KeyCode::ArrowRight) {
+            Direction::Right
+        } else {
+            head.direction
+        };
+
+        head.last_direction = Some(head.direction);
+        if dir != head.direction.opposite() {
+            head.direction = dir
         }
-        if keyboard_input.pressed(KeyCode::ArrowRight) {
-            pos.x = (pos.x + 1).min(AREA_WIDTH as i32 - 1)
-        }
-        if keyboard_input.pressed(KeyCode::ArrowDown) {
-            pos.y = (pos.y - 1).max(0);
-        }
-        if keyboard_input.pressed(KeyCode::ArrowUp) {
-            pos.y = (pos.y + 1).min(AREA_HEIGHT as i32 - 1)
+    }
+}
+
+fn snake_movement(
+    time: Res<Time>,
+    mut timer: ResMut<SnakeMovementTimer>,
+    mut heads: Query<(&mut Position, &SnakeHead)>,
+) {
+    if timer.0.tick(time.delta()).just_finished()
+        && let Some((mut head_pos, head)) = heads.iter_mut().next()
+    {
+        match &head.direction {
+            Direction::Left => {
+                if head_pos.x > 0 {
+                    head_pos.x = head_pos.x.saturating_sub(1);
+                } else {
+                    head_pos.x = (AREA_WIDTH - 1) as i32;
+                }
+            }
+            Direction::Down => {
+                if head_pos.y > 0 {
+                    head_pos.y = head_pos.y.saturating_sub(1);
+                } else {
+                    head_pos.y = (AREA_HEIGHT - 1) as i32;
+                }
+            }
+            Direction::Up => {
+                if head_pos.y < (AREA_HEIGHT - 1) as i32 {
+                    head_pos.y = head_pos.y.saturating_add(1);
+                } else {
+                    head_pos.y = 0;
+                }
+            }
+            Direction::Right => {
+                if head_pos.x < (AREA_WIDTH - 1) as i32 {
+                    head_pos.x = head_pos.x.saturating_add(1);
+                } else {
+                    head_pos.x = 0;
+                }
+            }
         }
     }
 }
@@ -110,7 +216,8 @@ fn main() {
     App::new()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
-                title: "A terrible version of Snake".to_string(),
+                name: Some("Bad Snake".to_string()),
+                title: "Bad Snake".to_string(),
                 resizable: false,
                 resolution: {
                     let mut res = WindowResolution::default();
@@ -123,7 +230,22 @@ fn main() {
         }))
         .insert_resource(ClearColor(Color::linear_rgb(0.0, 0.0, 0.0)))
         .add_systems(Startup, (setup_camera, spawn_snake))
-        .add_systems(Update, snake_movement)
+        .add_systems(
+            Update,
+            (
+                snake_movement,
+                food_spawner,
+                snake_movement_input.before(snake_movement),
+            ),
+        )
         .add_systems(PostUpdate, (position_translation, size_scaling))
+        .insert_resource(FoodSpawnTimer(Timer::from_seconds(
+            1.0,
+            TimerMode::Repeating,
+        )))
+        .insert_resource(SnakeMovementTimer(Timer::from_seconds(
+            0.15,
+            TimerMode::Repeating,
+        )))
         .run();
 }
