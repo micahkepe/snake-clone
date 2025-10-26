@@ -11,6 +11,8 @@ use rand::random;
 
 /// The color of the snake's head
 const SNAKE_HEAD_COLOR: Color = Color::linear_rgb(0.7, 0.7, 0.7);
+/// The speed of the snake's head (number of tiles per update)
+const SNAKE_HEAD_VELOCITY: i32 = 1;
 /// The color of the food
 const FOOD_COLOR: Color = Color::linear_rgb(1., 47. / 255., 136. / 255.); // #ff2f88
 /// The width of the game board (in tiles)
@@ -18,15 +20,18 @@ const AREA_WIDTH: u32 = 10;
 /// The height of the game board (in tiles)
 const AREA_HEIGHT: u32 = 10;
 
+/// Food component.
 #[derive(Debug, Component)]
 struct Food;
 
+/// 2D position component on the game board grid.
 #[derive(Component, Debug)]
 struct Position {
     x: i32,
     y: i32,
 }
 
+/// The direction of the snake's head.
 #[derive(PartialEq, Clone, Copy)]
 enum Direction {
     Left,
@@ -36,6 +41,7 @@ enum Direction {
 }
 
 impl Direction {
+    /// Returns the opposite direction.
     fn opposite(self) -> Self {
         match self {
             Direction::Left => Direction::Right,
@@ -46,6 +52,7 @@ impl Direction {
     }
 }
 
+/// The size of the sprites.
 #[derive(Component)]
 struct Size {
     width: f32,
@@ -53,6 +60,7 @@ struct Size {
 }
 
 impl Size {
+    /// Creates a square sprite.
     pub fn square(dim: f32) -> Self {
         Size {
             width: dim,
@@ -61,16 +69,26 @@ impl Size {
     }
 }
 
+/// The timer for the food spawning system.
 #[derive(Resource)]
 struct FoodSpawnTimer(Timer);
 
+/// Spawns food at random locations on the game board.
+///
+/// TODO: on fixed timer for now, but should be event-based once snake consumes last food item.
 fn food_spawner(time: Res<Time>, mut timer: ResMut<FoodSpawnTimer>, mut commands: Commands) {
     if timer.0.tick(time.delta()).just_finished() {
         commands
-            .spawn(Sprite {
-                color: FOOD_COLOR,
-                ..Default::default()
-            })
+            .spawn((
+                Sprite {
+                    color: FOOD_COLOR,
+                    ..Default::default()
+                },
+                Transform {
+                    translation: vec3(0.0, 0.0, 0.0),
+                    ..Default::default()
+                },
+            ))
             .insert(Food)
             .insert(Position {
                 x: (random::<f32>() * AREA_WIDTH as f32) as i32,
@@ -80,12 +98,16 @@ fn food_spawner(time: Res<Time>, mut timer: ResMut<FoodSpawnTimer>, mut commands
     }
 }
 
+/// The snake's head component.
 #[derive(Component)]
 struct SnakeHead {
+    /// The direction the snake is currently facing.
     direction: Direction,
+    /// The last direction the snake was facing, if any.
     last_direction: Option<Direction>,
 }
 
+/// Spawns the snake's head.
 fn spawn_snake(mut commands: Commands) {
     commands
         .spawn((
@@ -95,6 +117,7 @@ fn spawn_snake(mut commands: Commands) {
             },
             Transform {
                 scale: Vec3::new(10.0, 10.0, 10.0),
+                translation: Vec3::new(0.0, 0.0, 1.0),
                 ..default()
             },
         ))
@@ -106,9 +129,11 @@ fn spawn_snake(mut commands: Commands) {
         .insert(Size::square(0.8));
 }
 
+/// The timer for the snake's movement system.
 #[derive(Resource)]
 struct SnakeMovementTimer(Timer);
 
+/// Handles the snake's movement input.
 fn snake_movement_input(
     keyboard_input: Res<ButtonInput<KeyCode>>,
     mut heads: Query<&mut SnakeHead>,
@@ -126,13 +151,14 @@ fn snake_movement_input(
             head.direction
         };
 
-        head.last_direction = Some(head.direction);
         if dir != head.direction.opposite() {
+            head.last_direction = Some(head.direction);
             head.direction = dir
         }
     }
 }
 
+/// Moves the snake's head on a timer.
 fn snake_movement(
     time: Res<Time>,
     mut timer: ResMut<SnakeMovementTimer>,
@@ -143,41 +169,27 @@ fn snake_movement(
     {
         match &head.direction {
             Direction::Left => {
-                if head_pos.x > 0 {
-                    head_pos.x = head_pos.x.saturating_sub(1);
-                } else {
-                    head_pos.x = (AREA_WIDTH - 1) as i32;
-                }
+                head_pos.x = (head_pos.x - SNAKE_HEAD_VELOCITY).rem_euclid(AREA_WIDTH as i32);
             }
             Direction::Down => {
-                if head_pos.y > 0 {
-                    head_pos.y = head_pos.y.saturating_sub(1);
-                } else {
-                    head_pos.y = (AREA_HEIGHT - 1) as i32;
-                }
+                head_pos.y = (head_pos.y - SNAKE_HEAD_VELOCITY).rem_euclid(AREA_HEIGHT as i32);
             }
             Direction::Up => {
-                if head_pos.y < (AREA_HEIGHT - 1) as i32 {
-                    head_pos.y = head_pos.y.saturating_add(1);
-                } else {
-                    head_pos.y = 0;
-                }
+                head_pos.y = (head_pos.y + SNAKE_HEAD_VELOCITY).rem_euclid(AREA_HEIGHT as i32);
             }
             Direction::Right => {
-                if head_pos.x < (AREA_WIDTH - 1) as i32 {
-                    head_pos.x = head_pos.x.saturating_add(1);
-                } else {
-                    head_pos.x = 0;
-                }
+                head_pos.x = (head_pos.x + SNAKE_HEAD_VELOCITY).rem_euclid(AREA_WIDTH as i32);
             }
         }
     }
 }
 
+/// Sets up the camera.
 fn setup_camera(mut commands: Commands) {
     commands.spawn(Camera2d);
 }
 
+/// Scales the sprites to fit the game board.
 fn size_scaling(
     window_q: Query<&Window, With<PrimaryWindow>>,
     mut q: Query<(&Size, &mut Transform)>,
@@ -193,6 +205,7 @@ fn size_scaling(
     }
 }
 
+/// Translates the sprites to fit the game board.
 fn position_translation(
     window_q: Query<&Window, With<PrimaryWindow>>,
     mut q: Query<(&Position, &mut Transform)>,
@@ -209,9 +222,12 @@ fn position_translation(
                 0.0,
             )
         }
+    } else {
+        warn!("Could not get window resolution");
     }
 }
 
+/// The main Bevy app.
 fn main() {
     App::new()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
