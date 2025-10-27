@@ -72,15 +72,13 @@ impl Size {
     }
 }
 
-/// The timer for the food spawning system.
-#[derive(Resource)]
-struct FoodSpawnTimer(Timer);
+fn initial_food_spawn(mut food_spawn_writer: MessageWriter<FoodSpawnEvent>) {
+    food_spawn_writer.write(FoodSpawnEvent);
+}
 
 /// Spawns food at random locations on the game board.
-///
-/// TODO: on fixed timer for now, but should be event-based once snake consumes last food item.
-fn food_spawner(time: Res<Time>, mut timer: ResMut<FoodSpawnTimer>, mut commands: Commands) {
-    if timer.0.tick(time.delta()).just_finished() {
+fn food_spawner(mut commands: Commands, mut spawn_reader: MessageReader<FoodSpawnEvent>) {
+    if spawn_reader.read().next().is_some() {
         commands
             .spawn((
                 Sprite {
@@ -239,9 +237,13 @@ fn snake_growth(
 #[derive(Message)]
 struct GrowthEvent;
 
+#[derive(Message)]
+struct FoodSpawnEvent;
+
 fn snake_eating(
     mut commands: Commands,
     mut growth_writier: MessageWriter<GrowthEvent>,
+    mut food_spawn_writer: MessageWriter<FoodSpawnEvent>,
     food_positions: Query<(Entity, &Position), With<Food>>,
     head_positions: Query<&Position, With<SnakeHead>>,
 ) {
@@ -250,6 +252,7 @@ fn snake_eating(
             if food_pos == head_pos {
                 commands.entity(ent).despawn();
                 growth_writier.write(GrowthEvent);
+                food_spawn_writer.write(FoodSpawnEvent);
             }
         }
     }
@@ -316,7 +319,7 @@ fn main() {
             ..Default::default()
         }))
         .insert_resource(ClearColor(Color::linear_rgb(0.0, 0.0, 0.0)))
-        .add_systems(Startup, (setup_camera, spawn_snake))
+        .add_systems(Startup, (setup_camera, spawn_snake, initial_food_spawn))
         .add_systems(
             Update,
             (
@@ -329,12 +332,9 @@ fn main() {
         )
         .add_systems(PostUpdate, (position_translation, size_scaling))
         .add_message::<GrowthEvent>()
+        .add_message::<FoodSpawnEvent>()
         .insert_resource(SnakeSegments::default())
         .insert_resource(LastTailPosition::default())
-        .insert_resource(FoodSpawnTimer(Timer::from_seconds(
-            1.0,
-            TimerMode::Repeating,
-        )))
         .insert_resource(SnakeMovementTimer(Timer::from_seconds(
             0.15,
             TimerMode::Repeating,
