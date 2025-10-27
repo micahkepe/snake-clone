@@ -28,7 +28,7 @@ const AREA_HEIGHT: u32 = 10;
 struct Food;
 
 /// 2D position component on the game board grid.
-#[derive(Component, Debug, Clone, Copy)]
+#[derive(Component, Debug, Clone, Copy, PartialEq)]
 struct Position {
     x: i32,
     y: i32,
@@ -136,6 +136,9 @@ struct SnakeSegment;
 #[derive(Default, Resource)]
 struct SnakeSegments(Vec<Entity>);
 
+#[derive(Resource, Default)]
+struct LastTailPosition(Option<Position>);
+
 /// Spawns a snake tail segment at the position given by [`Position`].
 fn spawn_segment(mut commands: Commands, position: Position) -> Entity {
     commands
@@ -183,6 +186,7 @@ fn snake_movement(
     time: Res<Time>,
     mut timer: ResMut<SnakeMovementTimer>,
     segments: ResMut<SnakeSegments>,
+    mut last_tail_position: ResMut<LastTailPosition>,
     mut heads: Query<(Entity, &SnakeHead)>,
     mut positions: Query<&mut Position>,
 ) {
@@ -215,6 +219,39 @@ fn snake_movement(
             .iter()
             .zip(segments.0.iter().skip(1)) // off-by-one
             .for_each(|(pos, segment)| *positions.get_mut(*segment).unwrap() = *pos);
+        *last_tail_position = LastTailPosition(Some(*segment_positions.last().unwrap()));
+    }
+}
+
+fn snake_growth(
+    commands: Commands,
+    last_tail_position: Res<LastTailPosition>,
+    mut segments: ResMut<SnakeSegments>,
+    mut growth_reader: MessageReader<GrowthEvent>,
+) {
+    if growth_reader.read().next().is_some() {
+        segments
+            .0
+            .push(spawn_segment(commands, last_tail_position.0.unwrap()))
+    }
+}
+
+#[derive(Message)]
+struct GrowthEvent;
+
+fn snake_eating(
+    mut commands: Commands,
+    mut growth_writier: MessageWriter<GrowthEvent>,
+    food_positions: Query<(Entity, &Position), With<Food>>,
+    head_positions: Query<&Position, With<SnakeHead>>,
+) {
+    for head_pos in head_positions.iter() {
+        for (ent, food_pos) in food_positions.iter() {
+            if food_pos == head_pos {
+                commands.entity(ent).despawn();
+                growth_writier.write(GrowthEvent);
+            }
+        }
     }
 }
 
@@ -286,10 +323,14 @@ fn main() {
                 snake_movement,
                 food_spawner,
                 snake_movement_input.before(snake_movement),
+                snake_eating.after(snake_movement),
+                snake_growth.after(snake_eating),
             ),
         )
         .add_systems(PostUpdate, (position_translation, size_scaling))
+        .add_message::<GrowthEvent>()
         .insert_resource(SnakeSegments::default())
+        .insert_resource(LastTailPosition::default())
         .insert_resource(FoodSpawnTimer(Timer::from_seconds(
             1.0,
             TimerMode::Repeating,
