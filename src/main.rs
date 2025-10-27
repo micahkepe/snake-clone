@@ -11,8 +11,11 @@ use rand::random;
 
 /// The color of the snake's head
 const SNAKE_HEAD_COLOR: Color = Color::linear_rgb(0.7, 0.7, 0.7);
+/// The color of the snake's tail segment tiles.
+const SNAKE_SEGMENT_COLOR: Color = Color::linear_rgb(0.3, 0.3, 0.3);
 /// The speed of the snake's head (number of tiles per update)
 const SNAKE_HEAD_VELOCITY: i32 = 1;
+
 /// The color of the food
 const FOOD_COLOR: Color = Color::linear_rgb(1., 47. / 255., 136. / 255.); // #ff2f88
 /// The width of the game board (in tiles)
@@ -25,7 +28,7 @@ const AREA_HEIGHT: u32 = 10;
 struct Food;
 
 /// 2D position component on the game board grid.
-#[derive(Component, Debug)]
+#[derive(Component, Debug, Clone, Copy)]
 struct Position {
     x: i32,
     y: i32,
@@ -107,26 +110,43 @@ struct SnakeHead {
     last_direction: Option<Direction>,
 }
 
-/// Spawns the snake's head.
-fn spawn_snake(mut commands: Commands) {
-    commands
-        .spawn((
-            Sprite {
+/// Spawns the snake.
+fn spawn_snake(mut commands: Commands, mut segments: ResMut<SnakeSegments>) {
+    *segments = SnakeSegments(vec![
+        commands
+            .spawn(Sprite {
                 color: SNAKE_HEAD_COLOR,
                 ..default()
-            },
-            Transform {
-                scale: Vec3::new(10.0, 10.0, 10.0),
-                translation: Vec3::new(0.0, 0.0, 1.0),
-                ..default()
-            },
-        ))
-        .insert(SnakeHead {
-            direction: Direction::Up,
-            last_direction: None,
+            })
+            .insert(SnakeHead {
+                direction: Direction::Up,
+                last_direction: None,
+            })
+            .insert(SnakeSegment)
+            .insert(Position { x: 3, y: 3 })
+            .insert(Size::square(0.8))
+            .id(),
+        spawn_segment(commands, Position { x: 3, y: 2 }),
+    ]);
+}
+
+#[derive(Component)]
+struct SnakeSegment;
+
+#[derive(Default, Resource)]
+struct SnakeSegments(Vec<Entity>);
+
+/// Spawns a snake tail segment at the position given by [`Position`].
+fn spawn_segment(mut commands: Commands, position: Position) -> Entity {
+    commands
+        .spawn(Sprite {
+            color: SNAKE_SEGMENT_COLOR,
+            ..Default::default()
         })
-        .insert(Position { x: 3, y: 3 })
-        .insert(Size::square(0.8));
+        .insert(SnakeSegment)
+        .insert(position)
+        .insert(Size::square(0.65))
+        .id()
 }
 
 /// The timer for the snake's movement system.
@@ -162,11 +182,19 @@ fn snake_movement_input(
 fn snake_movement(
     time: Res<Time>,
     mut timer: ResMut<SnakeMovementTimer>,
-    mut heads: Query<(&mut Position, &SnakeHead)>,
+    segments: ResMut<SnakeSegments>,
+    mut heads: Query<(Entity, &SnakeHead)>,
+    mut positions: Query<&mut Position>,
 ) {
     if timer.0.tick(time.delta()).just_finished()
-        && let Some((mut head_pos, head)) = heads.iter_mut().next()
+        && let Some((head_entity, head)) = heads.iter_mut().next()
     {
+        let segment_positions: Vec<Position> = segments
+            .0
+            .iter()
+            .map(|e| *positions.get_mut(*e).unwrap())
+            .collect();
+        let mut head_pos = positions.get_mut(head_entity).unwrap();
         match &head.direction {
             Direction::Left => {
                 head_pos.x = (head_pos.x - SNAKE_HEAD_VELOCITY).rem_euclid(AREA_WIDTH as i32);
@@ -181,6 +209,12 @@ fn snake_movement(
                 head_pos.x = (head_pos.x + SNAKE_HEAD_VELOCITY).rem_euclid(AREA_WIDTH as i32);
             }
         }
+        // Update the positions of the trailing segments of the snake to the position of
+        // segment ahead of it
+        segment_positions
+            .iter()
+            .zip(segments.0.iter().skip(1)) // off-by-one
+            .for_each(|(pos, segment)| *positions.get_mut(*segment).unwrap() = *pos);
     }
 }
 
@@ -232,8 +266,8 @@ fn main() {
     App::new()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
-                name: Some("Bad Snake".to_string()),
-                title: "Bad Snake".to_string(),
+                name: Some("(Bad) Snake".to_string()),
+                title: "(Bad) Snake".to_string(),
                 resizable: false,
                 resolution: {
                     let mut res = WindowResolution::default();
@@ -255,6 +289,7 @@ fn main() {
             ),
         )
         .add_systems(PostUpdate, (position_translation, size_scaling))
+        .insert_resource(SnakeSegments::default())
         .insert_resource(FoodSpawnTimer(Timer::from_seconds(
             1.0,
             TimerMode::Repeating,
