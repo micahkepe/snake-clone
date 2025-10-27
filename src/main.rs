@@ -77,8 +77,28 @@ fn initial_food_spawn(mut food_spawn_writer: MessageWriter<FoodSpawnEvent>) {
 }
 
 /// Spawns food at random locations on the game board.
-fn food_spawner(mut commands: Commands, mut spawn_reader: MessageReader<FoodSpawnEvent>) {
+fn food_spawner(
+    mut commands: Commands,
+    mut spawn_reader: MessageReader<FoodSpawnEvent>,
+    segments: ResMut<SnakeSegments>,
+    positions: Query<&Position>,
+) {
     if spawn_reader.read().next().is_some() {
+        let mut position: Position;
+        loop {
+            // Spawn food at random locations on the game board not occupied by the snake.
+            position = Position {
+                x: (random::<f32>() * AREA_WIDTH as f32) as i32,
+                y: (random::<f32>() * AREA_HEIGHT as f32) as i32,
+            };
+            if !segments
+                .0
+                .iter()
+                .any(|e| *positions.get(*e).unwrap() == position)
+            {
+                break;
+            }
+        }
         commands
             .spawn((
                 Sprite {
@@ -91,10 +111,7 @@ fn food_spawner(mut commands: Commands, mut spawn_reader: MessageReader<FoodSpaw
                 },
             ))
             .insert(Food)
-            .insert(Position {
-                x: (random::<f32>() * AREA_WIDTH as f32) as i32,
-                y: (random::<f32>() * AREA_HEIGHT as f32) as i32,
-            })
+            .insert(position)
             .insert(Size::square(0.8));
     }
 }
