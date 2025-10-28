@@ -121,8 +121,6 @@ fn food_spawner(
 struct SnakeHead {
     /// The direction the snake is currently facing.
     direction: Direction,
-    /// The last direction the snake was facing, if any.
-    last_direction: Option<Direction>,
 }
 
 /// Spawns the snake.
@@ -135,7 +133,6 @@ fn spawn_snake(mut commands: Commands, mut segments: ResMut<SnakeSegments>) {
             })
             .insert(SnakeHead {
                 direction: Direction::Up,
-                last_direction: None,
             })
             .insert(SnakeSegment)
             .insert(Position { x: 3, y: 3 })
@@ -190,7 +187,6 @@ fn snake_movement_input(
         };
 
         if dir != head.direction.opposite() {
-            head.last_direction = Some(head.direction);
             head.direction = dir
         }
     }
@@ -201,6 +197,7 @@ fn snake_movement(
     time: Res<Time>,
     mut timer: ResMut<SnakeMovementTimer>,
     segments: ResMut<SnakeSegments>,
+    mut game_over_writer: MessageWriter<GameOverEvent>,
     mut last_tail_position: ResMut<LastTailPosition>,
     mut heads: Query<(Entity, &SnakeHead)>,
     mut positions: Query<&mut Position>,
@@ -228,6 +225,16 @@ fn snake_movement(
                 head_pos.x = (head_pos.x + SNAKE_HEAD_VELOCITY).rem_euclid(AREA_WIDTH as i32);
             }
         }
+
+        // Check for game over
+        if segment_positions
+            .iter()
+            .skip(1)
+            .any(|pos| pos == &*head_pos)
+        {
+            game_over_writer.write(GameOverEvent);
+        }
+
         // Update the positions of the trailing segments of the snake to the position of
         // segment ahead of it
         segment_positions
@@ -235,6 +242,23 @@ fn snake_movement(
             .zip(segments.0.iter().skip(1)) // off-by-one
             .for_each(|(pos, segment)| *positions.get_mut(*segment).unwrap() = *pos);
         *last_tail_position = LastTailPosition(Some(*segment_positions.last().unwrap()));
+    }
+}
+
+fn game_over(
+    mut commands: Commands,
+    mut reader: MessageReader<GameOverEvent>,
+    segments_res: ResMut<SnakeSegments>,
+    food: Query<Entity, With<Food>>,
+    segments: Query<Entity, With<SnakeSegment>>,
+    food_spawn_writer: MessageWriter<FoodSpawnEvent>,
+) {
+    if reader.read().next().is_some() {
+        for ent in food.iter().chain(segments.iter()) {
+            commands.entity(ent).despawn();
+        }
+        spawn_snake(commands, segments_res);
+        initial_food_spawn(food_spawn_writer);
     }
 }
 
@@ -318,6 +342,9 @@ fn position_translation(
     }
 }
 
+#[derive(Message)]
+struct GameOverEvent;
+
 /// The main Bevy app.
 fn main() {
     App::new()
@@ -345,11 +372,13 @@ fn main() {
                 snake_movement_input.before(snake_movement),
                 snake_eating.after(snake_movement),
                 snake_growth.after(snake_eating),
+                game_over.after(snake_movement),
             ),
         )
         .add_systems(PostUpdate, (position_translation, size_scaling))
         .add_message::<GrowthEvent>()
         .add_message::<FoodSpawnEvent>()
+        .add_message::<GameOverEvent>()
         .insert_resource(SnakeSegments::default())
         .insert_resource(LastTailPosition::default())
         .insert_resource(SnakeMovementTimer(Timer::from_seconds(
